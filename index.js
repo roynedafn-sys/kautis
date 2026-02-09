@@ -37,7 +37,9 @@ const economy = new Map();           // userId -> { balance, lastDaily }
 const afkMap = new Map();            // userId -> { reason, since }
 const giveaways = new Map();         // messageId -> { prize, endsAt, entrants: Set }
 
-// ---------- COMMAND REGISTRATION (ONCE) ----------
+const badWords = ["badword1", "badword2", "badword3"]; // change these
+
+// ---------- COMMAND REGISTRATION ----------
 const commands = [
     new SlashCommandBuilder()
         .setName("ticketpanel")
@@ -134,11 +136,17 @@ const commands = [
         )
 ].map(c => c.toJSON());
 
+// ---------- HELPERS ----------
+function getEcoData(userId) {
+    const data = economy.get(userId) || { balance: 0, lastDaily: 0 };
+    economy.set(userId, data);
+    return data;
+}
+
 // ---------- READY ----------
 client.once("ready", async () => {
     console.log(`${client.user.tag} is online`);
 
-    // Register commands for main guild
     const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
     try {
         await rest.put(
@@ -161,15 +169,6 @@ client.once("ready", async () => {
         type: ActivityType.Watching
     });
 });
-
-// ---------- HELPERS ----------
-function getEcoData(userId) {
-    const data = economy.get(userId) || { balance: 0, lastDaily: 0 };
-    economy.set(userId, data);
-    return data;
-}
-
-const badWords = ["badword1", "badword2", "badword3"]; // change these
 
 // ---------- INTERACTIONS ----------
 client.on("interactionCreate", async interaction => {
@@ -430,7 +429,7 @@ client.on("interactionCreate", async interaction => {
                         "> **User**\n" +
                         `- ${user.tag} (<@${user.id}>)\n\n` +
                         "> **Duration**\n" +
-                        `- ${minutes} minutes\n\n" +
+                        `- ${minutes} minutes\n\n` +
                         "> **Reason**\n" +
                         `- ${reason}`
                     )
@@ -472,7 +471,7 @@ client.on("interactionCreate", async interaction => {
                     "> **Prize**\n" +
                     `- ${prize}\n\n` +
                     "> **Hosted by**\n" +
-                    `- <@${interaction.user.id}>\n\n" +
+                    `- <@${interaction.user.id}>\n\n` +
                     "> **How to enter**\n" +
                     "- Click the button below to join.\n\n" +
                     "> **Status**\n" +
@@ -806,7 +805,7 @@ client.on("messageCreate", async message => {
                 "> **Fine Applied**\n" +
                 `- User: <@${message.author.id}>\n` +
                 `- Fine: ${fine} coins\n` +
-                `- Total: ${current + fine} coins\n\n" +
+                `- Total: ${current + fine} coins\n\n` +
                 "> **Note**\n" +
                 "- Repeated violations may lead to moderation actions."
             )
@@ -867,7 +866,7 @@ client.on("messageDelete", async message => {
             "> **User**\n" +
             `- ${message.author.tag} (<@${message.author.id}>)\n\n` +
             "> **Channel**\n" +
-            `- <#${message.channel.id}>\n\n" +
+            `- <#${message.channel.id}>\n\n` +
             "> **Content**\n" +
             `- ${message.content || "[no content / embed / attachment]"}`
         )
@@ -890,11 +889,11 @@ client.on("messageUpdate", async (oldMsg, newMsg) => {
         .setTitle("D2R Log • Message Edited")
         .setDescription(
             "> **User**\n" +
-            `- ${newMsg.author.tag} (<@${newMsg.author.id}>)\n\n" +
+            `- ${newMsg.author.tag} (<@${newMsg.author.id}>)\n\n` +
             "> **Channel**\n" +
-            `- <#${newMsg.channel.id}>\n\n" +
+            `- <#${newMsg.channel.id}>\n\n` +
             "> **Before**\n" +
-            `- ${oldMsg.content || "[no content]"}\n\n" +
+            `- ${oldMsg.content || "[no content]"}\n\n` +
             "> **After**\n" +
             `- ${newMsg.content || "[no content]"}`
         )
@@ -923,7 +922,7 @@ client.on("guildMemberAdd", async member => {
                 .setTitle("D2R Welcome")
                 .setDescription(
                     "> **New Member Joined**\n" +
-                    `- <@${member.id}>\n\n" +
+                    `- <@${member.id}>\n\n` +
                     "> **Info**\n" +
                     "- Welcome to D2R.\n" +
                     "- Read the rules.\n" +
@@ -972,5 +971,4 @@ client.on("guildMemberRemove", async member => {
 
 // ---------- LOGIN ----------
 client.login(process.env.TOKEN);
-
 
