@@ -14,7 +14,6 @@ const {
 const fs = require("fs");
 require("dotenv").config();
 
-// Create client
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -25,24 +24,25 @@ const client = new Client({
     partials: [Partials.Channel]
 });
 
-// Collections
 client.commands = new Collection();
 
-// Load commands from ./commands
+// In-memory data (resets on restart – good enough to start)
+client.ticketConfig = {
+    supportRoleId: process.env.SUPPORT_ROLE_ID,
+    ticketCategoryId: process.env.TICKET_CATEGORY_ID,
+    logChannelId: process.env.LOG_CHANNEL_ID
+};
+client.swearJar = new Map();   // userId -> coins
+client.economy = new Map();    // userId -> { balance, lastDaily }
+
+// Load commands
 const commandFiles = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
 for (const file of commandFiles) {
     const command = require(`./commands/${file}`);
     client.commands.set(command.data.name, command);
 }
 
-// Ticket config from env
-client.ticketConfig = {
-    supportRoleId: process.env.SUPPORT_ROLE_ID,
-    ticketCategoryId: process.env.TICKET_CATEGORY_ID,
-    logChannelId: process.env.LOG_CHANNEL_ID
-};
-
-// Handle interactions
+// ---------- INTERACTIONS (SLASH + BUTTONS) ----------
 client.on("interactionCreate", async interaction => {
     // Slash commands
     if (interaction.isChatInputCommand()) {
@@ -65,8 +65,10 @@ client.on("interactionCreate", async interaction => {
     // Buttons
     if (interaction.isButton()) {
         const { customId } = interaction;
-        const config = client.ticketConfig;
         const guild = interaction.guild;
+
+        // ----- D2R Ticket System -----
+        const config = client.ticketConfig;
 
         // Open ticket
         if (customId === "d2r-ticket-open") {
@@ -77,7 +79,6 @@ client.on("interactionCreate", async interaction => {
                 });
             }
 
-            // Check if user already has a ticket
             const existing = guild.channels.cache.find(
                 ch =>
                     ch.name === `d2r-ticket-${interaction.user.id}` &&
@@ -184,8 +185,6 @@ client.on("interactionCreate", async interaction => {
 
             await interaction.reply({ embeds: [closeEmbed] });
 
-            const config = client.ticketConfig;
-
             setTimeout(async () => {
                 if (config.logChannelId) {
                     const logChannel = interaction.guild.channels.cache.get(config.logChannelId);
@@ -202,7 +201,6 @@ client.on("interactionCreate", async interaction => {
         // Transcript
         if (customId === "d2r-ticket-transcript") {
             const channel = interaction.channel;
-            const config = client.ticketConfig;
 
             if (!channel.name.startsWith("d2r-ticket-")) {
                 return interaction.reply({
@@ -250,10 +248,200 @@ client.on("interactionCreate", async interaction => {
                 ephemeral: true
             });
         }
+
+        // ----- Role Button -----
+        if (customId === "d2r-role-button") {
+            const roleId = process.env.ROLE_BUTTON_ROLE_ID;
+            const member = interaction.member;
+
+            if (!roleId) {
+                return interaction.reply({
+                    content: "Role button is not configured.",
+                    ephemeral: true
+                });
+            }
+
+            const role = guild.roles.cache.get(roleId);
+            if (!role) {
+                return interaction.reply({
+                    content: "Configured role does not exist.",
+                    ephemeral: true
+                });
+            }
+
+            if (member.roles.cache.has(roleId)) {
+                await member.roles.remove(roleId);
+                return interaction.reply({
+                    content: `Role removed: <@&${roleId}>`,
+                    ephemeral: true
+                });
+            } else {
+                await member.roles.add(roleId);
+                return interaction.reply({
+                    content: `Role added: <@&${roleId}>`,
+                    ephemeral: true
+                });
+            }
+        }
     }
 });
 
-// Ready event
+// ---------- MESSAGE EVENTS (SWEAR JAR + LOGGING) ----------
+const badWords = ["badword1", "badword2", "badword3"]; // change these
+
+client.on("messageCreate", async message => {
+    if (!message.guild || message.author.bot) return;
+
+    const contentLower = message.content.toLowerCase();
+
+    // Swear jar
+    if (badWords.some(w => contentLower.includes(w))) {
+        await message.delete().catch(() => {});
+
+        const current = client.swearJar.get(message.author.id) || 0;
+        const fine = 10;
+        client.swearJar.set(message.author.id, current + fine);
+
+        const embed = new EmbedBuilder()
+            .setColor("#000000")
+            .setTitle("D2R Swear Jar")
+            .setDescription(
+                "> **Warning**\n" +
+                "- Inappropriate language detected.\n\n" +
+                "> **Fine Applied**\n" +
+                `- User: <@${message.author.id}>\n` +
+                `- Fine: ${fine} coins\n` +
+                `- Total: ${current + fine} coins\n\n` +
+                "> **Note**\n" +
+                "- Repeated violations may lead to moderation actions."
+            )
+            .setFooter({ text: "D2R • Swear Jar" });
+
+        await message.channel.send({ embeds: [embed] }).catch(() => {});
+    }
+
+    // Basic message delete logging is handled in messageDelete below
+});
+
+// Message delete logging
+client.on("messageDelete", async message => {
+    if (!message.guild || message.author?.bot) return;
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    const logChannel = message.guild.channels.cache.get(logChannelId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setColor("#000000")
+        .setTitle("D2R Log • Message Deleted")
+        .setDescription(
+            "> **User**\n" +
+            `- ${message.author.tag} (<@${message.author.id}>)\n\n` +
+            "> **Channel**\n" +
+            `- <#${message.channel.id}>\n\n` +
+            "> **Content**\n" +
+            `- ${message.content || "[no content / embed / attachment]"}`
+        )
+        .setFooter({ text: "D2R • Logging" });
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+// Message edit logging
+client.on("messageUpdate", async (oldMsg, newMsg) => {
+    if (!newMsg.guild || newMsg.author?.bot) return;
+    if (oldMsg.content === newMsg.content) return;
+
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    const logChannel = newMsg.guild.channels.cache.get(logChannelId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setColor("#000000")
+        .setTitle("D2R Log • Message Edited")
+        .setDescription(
+            "> **User**\n" +
+            `- ${newMsg.author.tag} (<@${newMsg.author.id}>)\n\n` +
+            "> **Channel**\n" +
+            `- <#${newMsg.channel.id}>\n\n` +
+            "> **Before**\n" +
+            `- ${oldMsg.content || "[no content]"}\n\n` +
+            "> **After**\n" +
+            `- ${newMsg.content || "[no content]"}`
+        )
+        .setFooter({ text: "D2R • Logging" });
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+// ---------- WELCOME SYSTEM ----------
+client.on("guildMemberAdd", async member => {
+    const welcomeChannelId = process.env.WELCOME_CHANNEL_ID;
+    const welcomeRoleId = process.env.WELCOME_ROLE_ID;
+
+    if (welcomeRoleId) {
+        const role = member.guild.roles.cache.get(welcomeRoleId);
+        if (role) {
+            await member.roles.add(role).catch(() => {});
+        }
+    }
+
+    if (welcomeChannelId) {
+        const channel = member.guild.channels.cache.get(welcomeChannelId);
+        if (channel) {
+            const embed = new EmbedBuilder()
+                .setColor("#000000")
+                .setTitle("D2R Welcome")
+                .setDescription(
+                    "> **New Member Joined**\n" +
+                    `- <@${member.id}>\n\n` +
+                    "> **Info**\n" +
+                    "- Welcome to D2R.\n" +
+                    "- Read the rules.\n" +
+                    "- Enjoy your stay.\n\n" +
+                    "> **Status**\n" +
+                    "- 🧪 Active\n" +
+                    "- 💬 Community growing"
+                )
+                .setFooter({ text: "D2R • Welcome" });
+
+            await channel.send({ embeds: [embed] }).catch(() => {});
+        }
+    }
+
+    // Log join
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    const logChannel = member.guild.channels.cache.get(logChannelId);
+    if (logChannel) {
+        const embed = new EmbedBuilder()
+            .setColor("#000000")
+            .setTitle("D2R Log • Member Joined")
+            .setDescription(
+                "> **User**\n" +
+                `- ${member.user.tag} (<@${member.id}>)`
+            )
+            .setFooter({ text: "D2R • Logging" });
+        await logChannel.send({ embeds: [embed] }).catch(() => {});
+    }
+});
+
+client.on("guildMemberRemove", async member => {
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    const logChannel = member.guild.channels.cache.get(logChannelId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setColor("#000000")
+        .setTitle("D2R Log • Member Left")
+        .setDescription(
+            "> **User**\n" +
+            `- ${member.user?.tag || "Unknown"} (<@${member.id}>)`
+        )
+        .setFooter({ text: "D2R • Logging" });
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+// ---------- READY ----------
 client.on("ready", async () => {
     console.log(`${client.user.tag} is online`);
 
@@ -272,5 +460,7 @@ client.on("ready", async () => {
 });
 
 client.login(process.env.TOKEN);
+
+
 
 
